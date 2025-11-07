@@ -13,6 +13,9 @@ import (
 // Note that NewIsolatedTestConfig sets up a Mock keyring as well
 func newTestAuthConfig(t *testing.T) *AuthConfig {
 	cfg, _ := NewIsolatedTestConfig(t)
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GH_ENTERPRISE_TOKEN", "")
 	return &AuthConfig{cfg: cfg.cfg}
 }
 
@@ -623,6 +626,33 @@ func TestUsersForHostWithUsers(t *testing.T) {
 
 	// Then it succeeds and returns the users
 	require.Equal(t, []string{"test-user-1", "test-user-2"}, users)
+}
+
+func TestRepositoryUser(t *testing.T) {
+	// Given repository mappings are configured for a host
+	authCfg := newTestAuthConfig(t)
+	authCfg.cfg.Set([]string{hostsKey, "github.com", repositoriesKey, "examplecorp"}, "samplebuilder")
+	authCfg.cfg.Set([]string{hostsKey, "github.com", repositoriesKey, "examplecorp/widgets"}, "examplebot")
+
+	// When we query the repository owner and slug
+	ownerUser := authCfg.RepositoryUser("github.com", "examplecorp")
+	slugUser := authCfg.RepositoryUser("github.com", "examplecorp/widgets")
+
+	// Then we get the configured usernames
+	require.Equal(t, "samplebuilder", ownerUser)
+	require.Equal(t, "examplebot", slugUser)
+}
+
+func TestRepositoryUserCaseInsensitive(t *testing.T) {
+	// Given repository mappings are stored in lowercase
+	authCfg := newTestAuthConfig(t)
+	authCfg.cfg.Set([]string{hostsKey, "github.com", repositoriesKey, "examplecorp"}, "someuser_GithubEMUOrg")
+
+	// When we query with mixed casing and extra slashes
+	user := authCfg.RepositoryUser("github.com", "/ExampleCorp/")
+
+	// Then the configured username is returned
+	require.Equal(t, "someuser_GithubEMUOrg", user)
 }
 
 func TestTokenForUserSecureLogin(t *testing.T) {

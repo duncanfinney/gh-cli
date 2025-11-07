@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/keyring"
@@ -33,6 +34,7 @@ const (
 	spinnerKey            = "spinner"
 	userKey               = "user"
 	usersKey              = "users"
+	repositoriesKey       = "repositories"
 	versionKey            = "version"
 )
 
@@ -491,6 +493,23 @@ func (c *AuthConfig) UsersForHost(hostname string) []string {
 	}
 
 	return users
+}
+
+func (c *AuthConfig) RepositoryUser(hostname, slug string) string {
+	slug = strings.Trim(strings.TrimSpace(slug), "/")
+	if slug == "" {
+		return ""
+	}
+	if user, err := c.cfg.Get([]string{hostsKey, hostname, repositoriesKey, slug}); err == nil && user != "" {
+		return user
+	}
+	lower := strings.ToLower(slug)
+	if lower != slug {
+		if user, err := c.cfg.Get([]string{hostsKey, hostname, repositoriesKey, lower}); err == nil && user != "" {
+			return user
+		}
+	}
+	return ""
 }
 
 func (c *AuthConfig) TokenForUser(hostname, user string) (string, string, error) {
