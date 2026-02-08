@@ -148,6 +148,10 @@ type AuthConfig interface {
 	// UsersForHost retrieves a list of users configured for a specific host.
 	UsersForHost(hostname string) []string
 
+	// RepositoryUser retrieves the preferred username for a given host and repository slug.
+	// Slug can be either an organization/owner name or "owner/repo".
+	RepositoryUser(hostname, slug string) string
+
 	// TokenForUser retrieves the authentication token and its source for a specified user and hostname.
 	TokenForUser(hostname, user string) (token string, source string, err error)
 

@@ -16,6 +16,8 @@ const tokenUser = "x-access-token"
 type config interface {
 	ActiveToken(string) (string, string)
 	ActiveUser(string) (string, error)
+	TokenForUser(string, string) (string, string, error)
+	RepositoryUser(string, string) string
 }
 
 type CredentialOptions struct {
@@ -111,24 +113,57 @@ func helperRun(opts *CredentialOptions) error {
 	}
 
 	lookupHost := wants["host"]
-	var gotUser string
-	gotToken, source := cfg.ActiveToken(lookupHost)
-	if gotToken == "" && strings.HasPrefix(lookupHost, "gist.") {
-		lookupHost = strings.TrimPrefix(lookupHost, "gist.")
-		gotToken, source = cfg.ActiveToken(lookupHost)
+	hostOptions := []string{lookupHost}
+	if strings.HasPrefix(lookupHost, "gist.") {
+		hostOptions = append(hostOptions, strings.TrimPrefix(lookupHost, "gist."))
+	}
+
+	candidateUsers := collectCandidateUsers(cfg, wants, hostOptions)
+
+	var (
+		gotToken     string
+		source       string
+		gotUser      string
+		resolvedHost string
+	)
+
+userLookup:
+	for _, user := range candidateUsers {
+		for _, hostOption := range hostOptions {
+			token, tokenSource, err := cfg.TokenForUser(hostOption, user)
+			if err == nil && token != "" {
+				gotToken = token
+				source = tokenSource
+				gotUser = user
+				resolvedHost = hostOption
+				break userLookup
+			}
+		}
+	}
+
+	if gotToken == "" {
+		for _, hostOption := range hostOptions {
+			token, tokenSource := cfg.ActiveToken(hostOption)
+			if token != "" {
+				gotToken = token
+				source = tokenSource
+				resolvedHost = hostOption
+				break
+			}
+		}
+	}
+
+	if gotToken == "" {
+		return cmdutil.SilentError
 	}
 
 	if strings.HasSuffix(source, "_TOKEN") {
 		gotUser = tokenUser
-	} else {
-		gotUser, _ = cfg.ActiveUser(lookupHost)
+	} else if gotUser == "" {
+		gotUser, _ = cfg.ActiveUser(resolvedHost)
 		if gotUser == "" {
 			gotUser = tokenUser
 		}
-	}
-
-	if gotUser == "" || gotToken == "" {
-		return cmdutil.SilentError
 	}
 
 	if wants["username"] != "" && gotUser != tokenUser && !strings.EqualFold(wants["username"], gotUser) {
@@ -141,4 +176,62 @@ func helperRun(opts *CredentialOptions) error {
 	fmt.Fprintf(opts.IO.Out, "password=%s\n", gotToken)
 
 	return nil
+}
+
+func collectCandidateUsers(cfg config, wants map[string]string, hostOptions []string) []string {
+	seen := map[string]struct{}{}
+	add := func(user string, out *[]string) {
+		user = strings.TrimSpace(user)
+		if user == "" {
+			return
+		}
+		if strings.EqualFold(user, tokenUser) {
+			return
+		}
+		key := strings.ToLower(user)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		*out = append(*out, user)
+	}
+
+	candidates := []string{}
+	add(wants["username"], &candidates)
+	owner, repo := ownerRepoFromPath(wants["path"])
+	if owner != "" {
+		if repo != "" {
+			slug := owner + "/" + repo
+			for _, host := range hostOptions {
+				add(cfg.RepositoryUser(host, slug), &candidates)
+			}
+		}
+		for _, host := range hostOptions {
+			add(cfg.RepositoryUser(host, owner), &candidates)
+		}
+		add(owner, &candidates)
+	}
+	return candidates
+}
+
+func ownerRepoFromPath(path string) (string, string) {
+	if path == "" {
+		return "", ""
+	}
+	path = strings.Trim(path, "/")
+	if path == "" {
+		return "", ""
+	}
+	parts := strings.SplitN(path, "/", 3)
+	owner := parts[0]
+	owner = strings.TrimSuffix(owner, ".git")
+	var repo string
+	if len(parts) > 1 {
+		repo = parts[1]
+	}
+	if repo == "" {
+		return owner, ""
+	}
+	repo = strings.TrimSuffix(repo, ".git")
+	return owner, repo
 }

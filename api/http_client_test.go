@@ -221,6 +221,52 @@ func TestHTTPClientRedirectAuthenticationHeaderHandling(t *testing.T) {
 	assert.Equal(t, 204, res.StatusCode)
 }
 
+func TestAddAuthTokenHeader_RepositoryMappingREST(t *testing.T) {
+	cfg := tinyConfig{
+		"github.com:oauth_token":                      "FALLBACK",
+		"github.com:samplebuilder:oauth_token":        "SAMPLETOKEN",
+		"github.com:repositories:examplecorp/widgets": "samplebuilder",
+	}
+
+	var gotAuth string
+	rt := AddAuthTokenHeader(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotAuth = req.Header.Get(authorization)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}}, nil
+	}), cfg)
+
+	req, err := http.NewRequest("GET", "https://api.github.com/repos/examplecorp/widgets/issues", nil)
+	require.NoError(t, err)
+
+	_, err = rt.RoundTrip(req)
+	require.NoError(t, err)
+
+	assert.Equal(t, "token SAMPLETOKEN", gotAuth)
+}
+
+func TestAddAuthTokenHeader_RepositoryMappingGraphQL(t *testing.T) {
+	cfg := tinyConfig{
+		"github.com:oauth_token":                       "FALLBACK",
+		"github.com:samplebuilder_example:oauth_token": "EXAMPLETOKEN",
+		"github.com:repositories:examplecorp":          "samplebuilder_example",
+	}
+
+	var gotAuth string
+	rt := AddAuthTokenHeader(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotAuth = req.Header.Get(authorization)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}}, nil
+	}), cfg)
+
+	body := `{"query":"query Repo($owner:String!,$name:String!){repository(owner:$owner,name:$name){id}}","variables":{"owner":"ExampleCorp","name":"gizmo"}}`
+	req, err := http.NewRequest("POST", "https://api.github.com/graphql", strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	_, err = rt.RoundTrip(req)
+	require.NoError(t, err)
+
+	assert.Equal(t, "token EXAMPLETOKEN", gotAuth)
+}
+
 func TestHTTPClientSanitizeJSONControlCharactersC0(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		issue := Issue{
@@ -299,6 +345,26 @@ func (c tinyConfig) ActiveToken(host string) (string, string) {
 	return c[fmt.Sprintf("%s:%s", host, "oauth_token")], "oauth_token"
 }
 
+func (c tinyConfig) TokenForUser(host, user string) (string, string, error) {
+	token := c[fmt.Sprintf("%s:%s:%s", host, user, "oauth_token")]
+	if token == "" {
+		return "", "default", fmt.Errorf("no token for %s", user)
+	}
+	source := c[fmt.Sprintf("%s:%s:%s", host, user, "source")]
+	if source == "" {
+		source = "oauth_token"
+	}
+	return token, source, nil
+}
+
+func (c tinyConfig) RepositoryUser(host, slug string) string {
+	if slug == "" {
+		return ""
+	}
+	key := fmt.Sprintf("%s:%s:%s", host, "repositories", strings.ToLower(slug))
+	return c[key]
+}
+
 var requestAtRE = regexp.MustCompile(`(?m)^\* Request at .+`)
 var dateRE = regexp.MustCompile(`(?m)^< Date: .+`)
 var hostWithPortRE = regexp.MustCompile(`127\.0\.0\.1:\d+`)
@@ -312,4 +378,10 @@ func normalizeVerboseLog(t string) string {
 	t = durationRE.ReplaceAllString(t, "* Request took <duration>")
 	t = timezoneRE.ReplaceAllString(t, "> Time-Zone: <timezone>")
 	return t
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

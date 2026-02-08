@@ -2,6 +2,7 @@ package login
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/MakeNowJust/heredoc"
@@ -16,6 +17,26 @@ func (c tinyConfig) ActiveToken(host string) (string, string) {
 
 func (c tinyConfig) ActiveUser(host string) (string, error) {
 	return c[fmt.Sprintf("%s:%s", host, "user")], nil
+}
+
+func (c tinyConfig) TokenForUser(host, user string) (string, string, error) {
+	token := c[fmt.Sprintf("%s:%s:%s", host, user, "oauth_token")]
+	if token == "" {
+		return "", "", fmt.Errorf("no token")
+	}
+	source := c[fmt.Sprintf("%s:%s:%s", host, user, "source")]
+	if source == "" {
+		source = c["_source"]
+	}
+	return token, source, nil
+}
+
+func (c tinyConfig) RepositoryUser(host, slug string) string {
+	if slug == "" {
+		return ""
+	}
+	key := fmt.Sprintf("%s:%s:%s", host, "repositories", strings.ToLower(slug))
+	return c[key]
 }
 
 func Test_helperRun(t *testing.T) {
@@ -214,6 +235,121 @@ func Test_helperRun(t *testing.T) {
 				host=example.com
 				username=x-access-token
 				password=OTOKEN
+			`),
+			wantStderr: "",
+		},
+		{
+			name: "host plus alternate user token",
+			opts: CredentialOptions{
+				Operation: "get",
+				Config: func() (config, error) {
+					return tinyConfig{
+						"_source":                       "/Users/monalisa/.config/gh/hosts.yml",
+						"example.com:user":              "monalisa",
+						"example.com:oauth_token":       "OTOKEN",
+						"example.com:hubot:oauth_token": "HTOKEN",
+						"example.com:hubot:source":      "oauth_token",
+					}, nil
+				},
+			},
+			input: heredoc.Doc(`
+				protocol=https
+				host=example.com
+				username=hubot
+			`),
+			wantErr: false,
+			wantStdout: heredoc.Doc(`
+				protocol=https
+				host=example.com
+				username=hubot
+				password=HTOKEN
+			`),
+			wantStderr: "",
+		},
+		{
+			name: "owner derived from path",
+			opts: CredentialOptions{
+				Operation: "get",
+				Config: func() (config, error) {
+					return tinyConfig{
+						"_source":                       "/Users/monalisa/.config/gh/hosts.yml",
+						"example.com:user":              "monalisa",
+						"example.com:oauth_token":       "OTOKEN",
+						"example.com:hubot:oauth_token": "HTOKEN",
+						"example.com:hubot:source":      "oauth_token",
+					}, nil
+				},
+			},
+			input: heredoc.Doc(`
+				protocol=https
+				host=example.com
+				path=/hubot/project.git
+			`),
+			wantErr: false,
+			wantStdout: heredoc.Doc(`
+				protocol=https
+				host=example.com
+				username=hubot
+				password=HTOKEN
+			`),
+			wantStderr: "",
+		},
+		{
+			name: "repository mapping takes precedence",
+			opts: CredentialOptions{
+				Operation: "get",
+				Config: func() (config, error) {
+					return tinyConfig{
+						"_source":                                     "/Users/monalisa/.config/gh/hosts.yml",
+						"github.com:user":                             "monalisa",
+						"github.com:oauth_token":                      "DEFAULT",
+						"github.com:samplebuilder:oauth_token":        "SBTOKEN",
+						"github.com:samplebuilder:source":             "oauth_token",
+						"github.com:examplebot:oauth_token":           "EBOT",
+						"github.com:repositories:examplecorp":         "samplebuilder",
+						"github.com:repositories:examplecorp/widgets": "examplebot",
+					}, nil
+				},
+			},
+			input: heredoc.Doc(`
+				protocol=https
+				host=github.com
+				path=/examplecorp/widgets.git
+			`),
+			wantErr: false,
+			wantStdout: heredoc.Doc(`
+				protocol=https
+				host=github.com
+				username=examplebot
+				password=EBOT
+			`),
+			wantStderr: "",
+		},
+		{
+			name: "owner mapping fallback",
+			opts: CredentialOptions{
+				Operation: "get",
+				Config: func() (config, error) {
+					return tinyConfig{
+						"_source":                "/Users/monalisa/.config/gh/hosts.yml",
+						"github.com:user":        "monalisa",
+						"github.com:oauth_token": "DEFAULT",
+						"github.com:someuser_GithubEMUOrg:oauth_token": "PTOKEN",
+						"github.com:repositories:examplecorp":          "someuser_GithubEMUOrg",
+					}, nil
+				},
+			},
+			input: heredoc.Doc(`
+				protocol=https
+				host=github.com
+				path=/ExampleCorp/gizmo
+			`),
+			wantErr: false,
+			wantStdout: heredoc.Doc(`
+				protocol=https
+				host=github.com
+				username=someuser_GithubEMUOrg
+				password=PTOKEN
 			`),
 			wantStderr: "",
 		},

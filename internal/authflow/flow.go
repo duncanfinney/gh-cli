@@ -123,6 +123,14 @@ func (c cfg) ActiveToken(hostname string) (string, string) {
 	return c.token, "oauth_token"
 }
 
+func (c cfg) TokenForUser(hostname, user string) (string, string, error) {
+	return "", "default", fmt.Errorf("no token for %s", user)
+}
+
+func (c cfg) RepositoryUser(hostname, slug string) string {
+	return ""
+}
+
 func getViewer(hostname, token string, logWriter io.Writer) (string, error) {
 	opts := api.HTTPClientOptions{
 		Config: cfg{token: token},
